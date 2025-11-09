@@ -10,43 +10,28 @@ st.set_page_config(page_title="Lumina Health Malaria Risk Analytics", layout="wi
 model = joblib.load('lumina_health_final_calibrated_xgb.joblib')
 with open("feature_columns.json") as f:
     feat_cols = json.load(f)
-if hasattr(model, "feature_importances_"):
-    importances = model.feature_importances_
-elif hasattr(model, "base_estimator_") and hasattr(model.base_estimator_, "feature_importances_"):
-    importances = model.base_estimator_.feature_importances_
-else:
-    importances = None
-if hasattr(model, "feature_importances_"):
-    importances = model.feature_importances_
-elif hasattr(model, "base_estimator_") and hasattr(model.base_estimator_, "feature_importances_"):
-    importances = model.base_estimator_.feature_importances_
-else:
-    importances = None
-
 
 profile_data = {}
-side_fields = [
-    ["Household_Size", 0, 10, 1],
-    ["Age", 0, 99, 18],
-    ["Sex", 0, 1, 1],
-    ["Pregnant", 0, 1, 0],
-    ["Wealth_Index", 1, 5, 3],
-    ["Bednet_Owned", 0, 1, 1],
-    ["Bednet_Used", 0, 1, 1],
-    ["Malaria_Tested", 0, 1, 1],
-    ["Recent_Fever", 0, 1, 0],
-    ["AntiMalaria_Meds", 0, 1, 1],
-    ["Water_Access", 0, 1, 1],
-    ["Cluster", 101, 129, 110],
-    ["Climate_Score", 30, 100, 60],
-    ["Month", 5, 10, 7]
-]
-for col, mn, mx, df in side_fields:
-    profile_data[col] = st.sidebar.number_input(col, mn, mx, df)
+profile_data['Household_Size'] = st.sidebar.number_input("Household Size", 1, 15, 4)
+profile_data['Age'] = st.sidebar.number_input("Age", 0, 99, 18)
+profile_data['Sex'] = {"Male": 0, "Female": 1}[st.sidebar.selectbox("Sex", ["Male", "Female"])]
+profile_data['Pregnant'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Pregnant", ["No", "Yes"])]
+profile_data['Wealth_Index'] = st.sidebar.selectbox("Wealth Index (1=Poorest, 5=Richest)", [1,2,3,4,5])
+profile_data['Bednet_Owned'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Bednet Owned", ["No", "Yes"])]
+profile_data['Bednet_Used'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Bednet Used", ["No", "Yes"])]
+profile_data['Malaria_Tested'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Malaria Tested", ["No", "Yes"])]
+profile_data['Recent_Fever'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Recent Fever", ["No", "Yes"])]
+profile_data['AntiMalaria_Meds'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Anti-Malaria Meds", ["No", "Yes"])]
+profile_data['Water_Access'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Water Access", ["No", "Yes"])]
+profile_data['Cluster'] = st.sidebar.selectbox("Cluster", list(range(101,130)))
+profile_data['Climate_Score'] = st.sidebar.slider("Climate Score", 30, 100, 60)
+profile_data['Month'] = st.sidebar.slider("Survey Month (5=May, ... 10=Oct)", 5, 10, 7)
+
 states = [s.replace("State_", "") for s in feat_cols if s.startswith("State_")]
 selected_state = st.sidebar.selectbox("State", states)
 for s in ["State_" + state for state in states]:
     profile_data[s] = 1 if s == "State_" + selected_state else 0
+
 source_types = [s.replace("Source_of_Net_", "") for s in feat_cols if s.startswith("Source_of_Net_")]
 selected_source = st.sidebar.selectbox("Source of Net", source_types)
 for s in ["Source_of_Net_" + src for src in source_types]:
@@ -98,3 +83,29 @@ if importances is not None:
     st.pyplot(fig)
 else:
     st.info("Feature importances not available for this model type.")
+
+import json
+import plotly.express as px
+
+with open('NGA_State_Boundaries_V2_-2781486175142980418.geojson', 'r') as f:
+    nigeria_geo = json.load(f)
+
+state_avg = pd.DataFrame({
+    'State': ['Kano', 'Adamawa', 'Oyo', 'Lagos', 'Enugu', 'Borno', 'Kaduna', 'FCT', 'Benue', 'Rivers'],
+    'Risk': [0.11, 0.10, 0.09, 0.085, 0.062, 0.058, 0.056, 0.04, 0.0, 0.0]
+})
+
+st.subheader("Malaria Risk by State: Nigeria Map")
+fig = px.choropleth(
+    state_avg,
+    geojson=nigeria_geo,
+    featureidkey="properties.statename",
+    locations='State',
+    color='Risk',
+    color_continuous_scale='Reds',
+    hover_name='State',
+    projection='mercator'
+)
+fig.update_geos(fitbounds="locations", visible=False)
+fig.update_layout(margin={"r":0,"t":30,"l":0,"b":0}, height=500)
+st.plotly_chart(fig)

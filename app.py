@@ -113,3 +113,20 @@ fig = px.choropleth(
 fig.update_geos(fitbounds="locations", visible=False)
 fig.update_layout(margin={"r":0,"t":30,"l":0,"b":0}, height=500)
 st.plotly_chart(fig)
+
+
+try:
+    importances = np.load("xgb_feature_importances.npy")
+except Exception:
+    importances = None
+
+if importances is not None:
+    indices = np.argsort(importances)[::-1]
+    top_n = 12
+    fig, ax = plt.subplots(figsize=(8, 3))
+    ax.bar(np.array(feat_cols)[indices[:top_n]], importances[indices[:top_n]])
+    plt.xticks(rotation=45, ha='right', fontsize=9)
+    ax.set_title("Feature Importances")
+    st.pyplot(fig)
+else:
+    st.info("Feature importances not available.")

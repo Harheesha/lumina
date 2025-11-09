@@ -44,7 +44,11 @@ st.title("Lumina Health: Malaria Risk Prediction")
 st.write("Enter household and environmental features. The predictive model provides immediate malaria risk assessment and suggested interventions.")
 
 if st.button("Predict Malaria Risk"):
-    inp_df = pd.DataFrame([profile_data])[feat_cols]
+    user_input = profile_data.copy()
+    for col in feat_cols:
+        if col not in user_input:
+            user_input[col] = 0
+    inp_df = pd.DataFrame([user_input])[feat_cols]
     prob = model.predict_proba(inp_df)[:, 1][0]
     if prob > 0.6:
         recommendation = "High malaria risk: prioritize urgent intervention."

@@ -5,12 +5,17 @@ import json
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.express as px
+import shap
 
 st.set_page_config(page_title="Lumina Health Malaria Risk Analytics", layout="wide")
 
 model = joblib.load('lumina_health_final_calibrated_xgb.joblib')
 with open("feature_columns.json") as f:
     feat_cols = json.load(f)
+
+with open('NGA_State_Boundaries_V2_-2781486175142980418.geojson', 'r') as f:
+    nigeria_geo = json.load(f)
+geo_states = {f['properties']['statename'] for f in nigeria_geo['features']}
 
 profile_data = {}
 profile_data['Household_Size'] = st.sidebar.number_input("Household Size", 1, 15, 4)
@@ -43,6 +48,7 @@ if 'session_log' not in st.session_state:
 
 st.title("Lumina Health: Malaria Risk Prediction")
 
+inp_df = None
 if st.button("Predict Malaria Risk"):
     user_input = profile_data.copy()
     for col in feat_cols:
@@ -60,11 +66,59 @@ if st.button("Predict Malaria Risk"):
     st.metric("Malaria Risk", f"{prob:.2f}")
     st.write("Recommendation:", recommendation)
 
+if st.button("Explain This Prediction") and inp_df is not None:
+    explainer = shap.TreeExplainer(model.base_estimator_ if hasattr(model, 'base_estimator_') else model)
+    shap_vals = explainer.shap_values(inp_df)
+    st.subheader("Feature Influence for This Prediction")
+    fig = shap.plots._waterfall.waterfall_legacy(
+        explainer.expected_value, shap_vals[0], inp_df.iloc[0], show=False, max_display=12
+    )
+    st.pyplot(fig)
+
 session_df = pd.DataFrame(st.session_state['session_log'])
 if not session_df.empty:
     st.subheader("Session Prediction Log")
     st.dataframe(session_df)
 
+st.subheader("Batch Malaria Risk Prediction (CSV Upload)")
+uploaded_file = st.file_uploader("Upload household CSV", type="csv")
+if uploaded_file:
+    batch_df = pd.read_csv(uploaded_file)
+    for col in feat_cols:
+        if col not in batch_df:
+            batch_df[col] = 0
+    batch_probs = model.predict_proba(batch_df[feat_cols])[:, 1]
+    batch_df['Predicted_Risk'] = batch_probs
+    st.dataframe(batch_df)
+    st.download_button(
+        label="Download batch results",
+        data=batch_df.to_csv(index=False).encode(),
+        file_name="batch_results.csv",
+        mime="text/csv"
+    )
+    if 'State' in batch_df.columns:
+        state_avg = batch_df.groupby('State')['Predicted_Risk'].mean().reset_index()
+        state_avg.columns = ['State', 'Risk']
+        missing_states = set(state_avg['State']) - geo_states
+        if missing_states:
+            st.warning(f"States not matching map: {missing_states}")
+        fig = px.choropleth(
+            state_avg,
+            geojson=nigeria_geo,
+            featureidkey="properties.statename",
+            locations='State',
+            color='Risk',
+            color_continuous_scale='Reds',
+            hover_name='State',
+            projection='mercator'
+        )
+        fig.update_geos(fitbounds="locations", visible=False)
+        fig.update_layout(margin={"r":0,"t":30,"l":0,"b":0}, height=500)
+        st.plotly_chart(fig)
+    else:
+        st.warning("Batch must have 'State' column matching your GeoJSON.")
+
+st.subheader("Top Model Features (Training)")
 try:
     importances = np.load("xgb_feature_importances.npy")
 except Exception:
@@ -78,32 +132,7 @@ if importances is not None and len(importances) == len(feat_cols):
     plt.xticks(rotation=45, ha='right', fontsize=9)
     ax.set_title("Feature Importances")
     st.pyplot(fig)
+    top_features = [feat_cols[i] for i in indices[:top_n]]
+    st.table(pd.DataFrame({'Feature': top_features, 'Importance': importances[indices[:top_n]]}))
 else:
     st.warning("Feature importances not available for this model.")
-
-try:
-    with open('NGA_State_Boundaries_V2_-2781486175142980418.geojson', 'r') as f:
-        nigeria_geo = json.load(f)
-    state_avg = pd.DataFrame({
-        'State': ['Kano', 'Adamawa', 'Oyo', 'Lagos', 'Enugu', 'Borno', 'Kaduna', 'FCT', 'Benue', 'Rivers'],
-        'Risk': [0.11, 0.10, 0.09, 0.085, 0.062, 0.058, 0.056, 0.04, 0.0, 0.0]
-    })
-    geo_states = {f['properties']['statename'] for f in nigeria_geo['features']}
-    missing_states = set(state_avg['State']) - geo_states
-    if missing_states:
-        st.warning(f"State(s) missing from map: {missing_states}")
-    fig = px.choropleth(
-        state_avg,
-        geojson=nigeria_geo,
-        featureidkey="properties.statename",
-        locations='State',
-        color='Risk',
-        color_continuous_scale='Reds',
-        hover_name='State',
-        projection='mercator'
-    )
-    fig.update_geos(fitbounds="locations", visible=False)
-    fig.update_layout(margin={"r":0,"t":30,"l":0,"b":0}, height=500)
-    st.plotly_chart(fig)
-except Exception:
-    st.warning("Map or GeoJSON not available or not formatted correctly.")

@@ -10,7 +10,19 @@ st.set_page_config(page_title="Lumina Health Malaria Risk Analytics", layout="wi
 model = joblib.load('lumina_health_final_calibrated_xgb.joblib')
 with open("feature_columns.json") as f:
     feat_cols = json.load(f)
-importances = model.base_estimator_.feature_importances_
+if hasattr(model, "feature_importances_"):
+    importances = model.feature_importances_
+elif hasattr(model, "base_estimator_") and hasattr(model.base_estimator_, "feature_importances_"):
+    importances = model.base_estimator_.feature_importances_
+else:
+    importances = None
+if hasattr(model, "feature_importances_"):
+    importances = model.feature_importances_
+elif hasattr(model, "base_estimator_") and hasattr(model.base_estimator_, "feature_importances_"):
+    importances = model.base_estimator_.feature_importances_
+else:
+    importances = None
+
 
 profile_data = {}
 side_fields = [
@@ -69,10 +81,20 @@ if st.button("Download CSV Report"):
     st.success("CSV report saved.")
 
 st.subheader("Top Model Features")
-indices = np.argsort(importances)[::-1]
-top_n = 12
-fig, ax = plt.subplots(figsize=(8, 3))
-ax.bar(np.array(feat_cols)[indices[:top_n]], importances[indices[:top_n]])
-plt.xticks(rotation=45, ha='right', fontsize=9)
-ax.set_title("Feature Importances")
-st.pyplot(fig)
+if hasattr(model, "feature_importances_"):
+    importances = model.feature_importances_
+elif hasattr(model, "base_estimator_") and hasattr(model.base_estimator_, "feature_importances_"):
+    importances = model.base_estimator_.feature_importances_
+else:
+    importances = None
+
+if importances is not None:
+    indices = np.argsort(importances)[::-1]
+    top_n = 12
+    fig, ax = plt.subplots(figsize=(8, 3))
+    ax.bar(np.array(feat_cols)[indices[:top_n]], importances[indices[:top_n]])
+    plt.xticks(rotation=45, ha='right', fontsize=9)
+    ax.set_title("Feature Importances")
+    st.pyplot(fig)
+else:
+    st.info("Feature importances not available for this model type.")

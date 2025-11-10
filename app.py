@@ -1,138 +1,29 @@
-import streamlit as st
-import pandas as pd
-import joblib
-import json
-import numpy as np
-import matplotlib.pyplot as plt
-import plotly.express as px
-import shap
+from flask import Flask, request, jsonify
+import joblib, json, pandas as pd
+from sklearn.preprocessing import LabelEncoder
 
-st.set_page_config(page_title="Lumina Health Malaria Risk Analytics", layout="wide")
+app=Flask(__name__)
+with open("feature_columns.json") as f: feature_cols=json.load(f)
+with open("field_map.json") as f: field_map=json.load(f)
+models = {m: f"{m}.joblib" for m in ['random_forest','xgboost','neural_net']}
 
-model = joblib.load('lumina_health_final_calibrated_xgb.joblib')
-with open("feature_columns.json") as f:
-    feat_cols = json.load(f)
+def preprocess(df):
+    for col in df.select_dtypes(include=["object","category"]).columns:
+        df[col] = LabelEncoder().fit_transform(df[col].astype(str))
+    return df
 
-with open('NGA_State_Boundaries_V2_-2781486175142980418.geojson', 'r') as f:
-    nigeria_geo = json.load(f)
-geo_states = {f['properties']['statename'] for f in nigeria_geo['features']}
+@app.route("/predict", methods=["POST"])
+def predict():
+    data = request.json
+    model_name = data.get("model","xgboost")
+    clf = joblib.load(models[model_name])
+    features = {field_map[k]: data[k] for k in field_map if k in data}
+    df = pd.DataFrame([features])
+    df = preprocess(df)
+    pred = clf.predict(df[feature_cols])[0]
+    return jsonify({"riskScore": round(float(pred), 3), "model": model_name})
 
-profile_data = {}
-profile_data['Household_Size'] = st.sidebar.number_input("Household Size", 1, 15, 4)
-profile_data['Age'] = st.sidebar.number_input("Age", 0, 99, 18)
-profile_data['Sex'] = {"Male": 0, "Female": 1}[st.sidebar.selectbox("Sex", ["Male", "Female"])]
-profile_data['Pregnant'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Pregnant", ["No", "Yes"])]
-profile_data['Wealth_Index'] = st.sidebar.selectbox("Wealth Index (1=Poorest, 5=Richest)", [1,2,3,4,5])
-profile_data['Bednet_Owned'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Bednet Owned", ["No", "Yes"])]
-profile_data['Bednet_Used'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Bednet Used", ["No", "Yes"])]
-profile_data['Malaria_Tested'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Malaria Tested", ["No", "Yes"])]
-profile_data['Recent_Fever'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Recent Fever", ["No", "Yes"])]
-profile_data['AntiMalaria_Meds'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Anti-Malaria Meds", ["No", "Yes"])]
-profile_data['Water_Access'] = {"No": 0, "Yes": 1}[st.sidebar.selectbox("Water Access", ["No", "Yes"])]
-profile_data['Cluster'] = st.sidebar.selectbox("Cluster", list(range(101,130)))
-profile_data['Climate_Score'] = st.sidebar.slider("Climate Score", 30, 100, 60)
-profile_data['Month'] = st.sidebar.slider("Survey Month (5=May, ... 10=Oct)", 5, 10, 7)
+# Batch endpoint omitted for brevity (same logic with model_name)
 
-states = [s.replace("State_", "") for s in feat_cols if s.startswith("State_")]
-selected_state = st.sidebar.selectbox("State", states)
-for s in ["State_" + state for state in states]:
-    profile_data[s] = 1 if s == "State_" + selected_state else 0
-
-source_types = [s.replace("Source_of_Net_", "") for s in feat_cols if s.startswith("Source_of_Net_")]
-selected_source = st.sidebar.selectbox("Source of Net", source_types)
-for s in ["Source_of_Net_" + src for src in source_types]:
-    profile_data[s] = 1 if s == "Source_of_Net_" + selected_source else 0
-
-if 'session_log' not in st.session_state:
-    st.session_state['session_log'] = []
-
-st.title("Lumina Health: Malaria Risk Prediction")
-
-inp_df = None
-if st.button("Predict Malaria Risk"):
-    user_input = profile_data.copy()
-    for col in feat_cols:
-        if col not in user_input:
-            user_input[col] = 0
-    inp_df = pd.DataFrame([user_input])[feat_cols]
-    prob = model.predict_proba(inp_df)[:, 1][0]
-    if prob > 0.6:
-        recommendation = "High malaria risk: urgent action needed."
-    elif prob > 0.25:
-        recommendation = "Moderate risk: plan targeted outreach."
-    else:
-        recommendation = "Low risk: continue prevention."
-    st.session_state['session_log'].append(dict(Risk_Score=prob, Recommendation=recommendation, **profile_data))
-    st.metric("Malaria Risk", f"{prob:.2f}")
-    st.write("Recommendation:", recommendation)
-
-if st.button("Explain This Prediction") and inp_df is not None:
-    explainer = shap.TreeExplainer(model.base_estimator_ if hasattr(model, 'base_estimator_') else model)
-    shap_vals = explainer.shap_values(inp_df)
-    st.subheader("Feature Influence for This Prediction")
-    fig = shap.plots._waterfall.waterfall_legacy(
-        explainer.expected_value, shap_vals[0], inp_df.iloc[0], show=False, max_display=12
-    )
-    st.pyplot(fig)
-
-session_df = pd.DataFrame(st.session_state['session_log'])
-if not session_df.empty:
-    st.subheader("Session Prediction Log")
-    st.dataframe(session_df)
-
-st.subheader("Batch Malaria Risk Prediction (CSV Upload)")
-uploaded_file = st.file_uploader("Upload household CSV", type="csv")
-if uploaded_file:
-    batch_df = pd.read_csv(uploaded_file)
-    for col in feat_cols:
-        if col not in batch_df:
-            batch_df[col] = 0
-    batch_probs = model.predict_proba(batch_df[feat_cols])[:, 1]
-    batch_df['Predicted_Risk'] = batch_probs
-    st.dataframe(batch_df)
-    st.download_button(
-        label="Download batch results",
-        data=batch_df.to_csv(index=False).encode(),
-        file_name="batch_results.csv",
-        mime="text/csv"
-    )
-    if 'State' in batch_df.columns:
-        state_avg = batch_df.groupby('State')['Predicted_Risk'].mean().reset_index()
-        state_avg.columns = ['State', 'Risk']
-        missing_states = set(state_avg['State']) - geo_states
-        if missing_states:
-            st.warning(f"States not matching map: {missing_states}")
-        fig = px.choropleth(
-            state_avg,
-            geojson=nigeria_geo,
-            featureidkey="properties.statename",
-            locations='State',
-            color='Risk',
-            color_continuous_scale='Reds',
-            hover_name='State',
-            projection='mercator'
-        )
-        fig.update_geos(fitbounds="locations", visible=False)
-        fig.update_layout(margin={"r":0,"t":30,"l":0,"b":0}, height=500)
-        st.plotly_chart(fig)
-    else:
-        st.warning("Batch must have 'State' column matching your GeoJSON.")
-
-st.subheader("Top Model Features (Training)")
-try:
-    importances = np.load("xgb_feature_importances.npy")
-except Exception:
-    importances = None
-
-if importances is not None and len(importances) == len(feat_cols):
-    indices = np.argsort(importances)[::-1]
-    top_n = 12
-    fig, ax = plt.subplots(figsize=(8, 3))
-    ax.bar(np.array(feat_cols)[indices[:top_n]], importances[indices[:top_n]])
-    plt.xticks(rotation=45, ha='right', fontsize=9)
-    ax.set_title("Feature Importances")
-    st.pyplot(fig)
-    top_features = [feat_cols[i] for i in indices[:top_n]]
-    st.table(pd.DataFrame({'Feature': top_features, 'Importance': importances[indices[:top_n]]}))
-else:
-    st.warning("Feature importances not available for this model.")
+if __name__=="__main__":
+    app.run(host="0.0.0.0",port=5000)

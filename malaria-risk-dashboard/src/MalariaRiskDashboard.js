@@ -103,11 +103,12 @@ const MalariaRiskDashboard = () => {
   };
 
   // Send POST request to Flask backend
-  const response = await fetch('http://localhost:5000/predict', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
+  const response = await fetch('https://lumina-health.onrender.com/predict', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(payload),
+});
+
 
   if (!response.ok) {
     // Handle error (e.g., show an alert)
